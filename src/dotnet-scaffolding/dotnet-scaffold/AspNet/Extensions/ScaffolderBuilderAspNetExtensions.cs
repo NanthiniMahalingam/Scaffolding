@@ -130,6 +130,7 @@ internal static class ScaffolderBuilderAspNetExtensions
 
             step.TextTemplatingProperties = [dbContextTextTemplatingProperty];
             step.DisplayName = $"{dbContextProperties?.DbContextName ?? CliConstants.Identity.DbContextName}{CliConstants.CSharpExtension}";
+            step.Overwrite = true;
         });
 
         return builder;
