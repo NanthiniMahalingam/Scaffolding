@@ -193,11 +193,11 @@ internal class ValidateIdentityStep : ScaffoldStep
             return null;
         }
 
-        var allClasses = await projectInfo.CodeService.GetAllClassSymbolsAsync();
+        var allClasses = (await projectInfo.CodeService.GetAllClassSymbolsAsync()).ToList();
         var dbContextClassSymbol = GetIdentityDbContextSymbol(allClasses, settings.DataContext);
         var dbContextClassName = string.IsNullOrEmpty(settings.DataContext)
             ? settings.DataContext
-            : ResolveIdentityDbContextName(settings.DataContext, dbContextClassSymbol);
+            : ResolveIdentityDbContextName(settings.DataContext, dbContextClassSymbol, allClasses);
 
         DbContextInfo dbContextInfo = new();
         if (!string.IsNullOrEmpty(dbContextClassName) && !string.IsNullOrEmpty(settings.DatabaseProvider))
@@ -265,8 +265,27 @@ internal class ValidateIdentityStep : ScaffoldStep
             ? null
             : allClasses.FirstOrDefault(x => x.Name.Equals(dbContextClassName, StringComparison.OrdinalIgnoreCase) && IsIdentityDbContextSymbol(x));
 
-    private static string ResolveIdentityDbContextName(string requestedName, ISymbol? existingIdentitySymbol)
-        => existingIdentitySymbol is null && !string.Equals(requestedName, AspNetConstants.Identity.DbContextName, StringComparison.OrdinalIgnoreCase)
+    private static string ResolveIdentityDbContextName(
+        string requestedName,
+        ISymbol? existingIdentitySymbol,
+        IEnumerable<ISymbol> allClasses)
+    {
+        if (existingIdentitySymbol is not null)
+        {
+            return requestedName;
+        }
+
+        var classNames = allClasses.Select(symbol => symbol.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var baseName = classNames.Contains(requestedName)
             ? AspNetConstants.Identity.DbContextName
             : requestedName;
+        for (var suffix = 0; ; suffix++)
+        {
+            var candidateName = suffix == 0 ? baseName : $"{baseName}{suffix}";
+            if (!classNames.Contains(candidateName))
+            {
+                return candidateName;
+            }
+        }
+    }
 }

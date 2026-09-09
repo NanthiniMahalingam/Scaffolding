@@ -14,6 +14,56 @@ public class BlazorIdentityNet10IntegrationTests : BlazorIdentityIntegrationTest
     protected override string TestClassName => nameof(BlazorIdentityNet10IntegrationTests);
 
     [Fact]
+    public async Task Scaffold_BlazorIdentity_GeneratesUniqueDbContext_WhenCrudDbContextExists()
+    {
+        File.WriteAllText(_testProjectPath, ProjectContent);
+        File.WriteAllText(Path.Combine(_testProjectDir, "Program.cs"), ScaffoldCliHelper.GetBlazorProgramCs("TestProject"));
+        ScaffoldCliHelper.SetupBlazorProjectStructure(_testProjectDir);
+
+        var modelsDirectory = Path.Combine(_testProjectDir, "Models");
+        Directory.CreateDirectory(modelsDirectory);
+        File.WriteAllText(
+            Path.Combine(modelsDirectory, "TestModel.cs"),
+            ScaffoldCliHelper.GetModelClassContent("TestProject", "TestModel"));
+
+        var (crudExitCode, crudOutput, crudError) = await ScaffoldCliHelper.RunScaffoldAsync(
+            TargetFramework,
+            "blazor-crud",
+            "--project", _testProjectPath,
+            "--model", "TestModel",
+            "--dataContext", "TestDbContext",
+            "--dbProvider", "sqlite-efcore",
+            "--page", "CRUD");
+        Assert.True(crudExitCode == 0, $"CRUD scaffold should succeed.\nOutput: {crudOutput}\nError: {crudError}");
+
+        var crudDbContextPath = Path.Combine(_testProjectDir, "Data", "TestDbContext.cs");
+        Assert.True(File.Exists(crudDbContextPath), "CRUD DbContext file should be created.");
+        var crudDbContextContent = File.ReadAllText(crudDbContextPath);
+        Assert.Contains("public class TestDbContext(", crudDbContextContent);
+        Assert.Contains(": DbContext", crudDbContextContent);
+
+        var (identityExitCode, identityOutput, identityError) = await ScaffoldCliHelper.RunScaffoldAsync(
+            TargetFramework,
+            "blazor-identity",
+            "--project", _testProjectPath,
+            "--dataContext", "TestDbContext",
+            "--dbProvider", "sqlite-efcore");
+        Assert.True(identityExitCode == 0, $"Blazor Identity scaffold should succeed.\nOutput: {identityOutput}\nError: {identityError}");
+
+        var identityDbContextPath = Path.Combine(_testProjectDir, "Data", "NewIdentityDbContext.cs");
+        Assert.True(File.Exists(identityDbContextPath), "Blazor Identity should create NewIdentityDbContext.cs when the requested name belongs to a CRUD DbContext.");
+        Assert.Equal(crudDbContextContent, File.ReadAllText(crudDbContextPath));
+
+        var identityDbContextContent = File.ReadAllText(identityDbContextPath);
+        Assert.Contains("public class NewIdentityDbContext(", identityDbContextContent);
+        Assert.Contains(": IdentityDbContext<TestProject.Data.ApplicationUser>", identityDbContextContent);
+
+        var (buildExitCode, buildOutput, buildError) = await RunBuildAsync(_testProjectDir);
+        Assert.True(buildExitCode == 0,
+            $"Project should build after CRUD and Blazor Identity scaffolding.\nOutput: {buildOutput}\nError: {buildError}");
+    }
+
+    [Fact]
     public async Task Scaffold_BlazorIdentity_Net10_CliInvocation()
     {
         // Arrange write project + Program.cs + Blazor project structure

@@ -46,7 +46,7 @@ internal static class ScaffolderBuilderAspNetExtensions
 
             string? connectionStringName = null;
             context.Properties.TryGetValue(Constants.StepConstants.BaseProjectPath, out var baseProjectPathObj);
-            context.Properties.TryGetValue(Constants.StepConstants.CodeModifierProperties, out var codeModifierPropertiesObj); 
+            context.Properties.TryGetValue(Constants.StepConstants.CodeModifierProperties, out var codeModifierPropertiesObj);
             var baseProjectPathVal = baseProjectPathObj?.ToString();
             var codeModifierProperties = codeModifierPropertiesObj as IDictionary<string, string>;
             codeModifierProperties?.TryGetValue(Constants.CodeModifierPropertyConstants.ConnectionStringName, out connectionStringName);
@@ -95,7 +95,7 @@ internal static class ScaffolderBuilderAspNetExtensions
     }
 
     /// <summary>
-    /// Adds a new IdentityDbContext class 
+    /// Adds a new IdentityDbContext class
     /// </summary>
     /// <param name="builder"></param>
     /// <returns></returns>
@@ -130,7 +130,6 @@ internal static class ScaffolderBuilderAspNetExtensions
 
             step.TextTemplatingProperties = [dbContextTextTemplatingProperty];
             step.DisplayName = $"{dbContextProperties?.DbContextName ?? CliConstants.Identity.DbContextName}{CliConstants.CSharpExtension}";
-            step.Overwrite = true;
         });
 
         return builder;
