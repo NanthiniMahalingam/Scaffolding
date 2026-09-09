@@ -48,9 +48,9 @@ internal static class ScaffoldCliHelper
     {
         var candidates = new[]
         {
-            FindDotNetInDir(System.Environment.GetEnvironmentVariable("DOTNET_INSTALL_DIR")),
+            FindDotNetInDir(System.Environment.GetEnvironmentVariable("DOTNET_INSTALL_DIR") ?? string.Empty),
             FindDotNetInDir(Path.Combine(GetRepoRoot(), ".dotnet")),
-            FindDotNetInDir(Path.GetDirectoryName(System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName))
+            FindDotNetInDir(Path.GetDirectoryName(System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName) ?? string.Empty)
         }
         .Where(path => !string.IsNullOrEmpty(path))
         .Select(path => path!)
@@ -66,9 +66,9 @@ internal static class ScaffoldCliHelper
         return candidates.FirstOrDefault() ?? "dotnet";
     }
 
-    private static string? FindDotNetInDir(string directory)
+    private static string? FindDotNetInDir(string? directory)
     {
-        if (!Directory.Exists(directory)) return null;
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory)) return null;
 
         var dotnetExe = Path.Combine(directory, "dotnet.exe");
         if (File.Exists(dotnetExe)) return dotnetExe;

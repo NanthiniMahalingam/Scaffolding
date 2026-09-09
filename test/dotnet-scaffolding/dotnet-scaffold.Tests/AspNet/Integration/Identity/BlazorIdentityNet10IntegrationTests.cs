@@ -64,6 +64,57 @@ public class BlazorIdentityNet10IntegrationTests : BlazorIdentityIntegrationTest
     }
 
     [Fact]
+    public async Task Scaffold_BlazorIdentity_AppendsSuffix_WhenNewIdentityDbContextExists()
+    {
+        File.WriteAllText(_testProjectPath, ProjectContent);
+        File.WriteAllText(Path.Combine(_testProjectDir, "Program.cs"), ScaffoldCliHelper.GetBlazorProgramCs("TestProject"));
+        ScaffoldCliHelper.SetupBlazorProjectStructure(_testProjectDir);
+
+        var modelsDirectory = Path.Combine(_testProjectDir, "Models");
+        Directory.CreateDirectory(modelsDirectory);
+        File.WriteAllText(
+            Path.Combine(modelsDirectory, "TestModel.cs"),
+            ScaffoldCliHelper.GetModelClassContent("TestProject", "TestModel"));
+
+        var dataDirectory = Path.Combine(_testProjectDir, "Data");
+        Directory.CreateDirectory(dataDirectory);
+        var existingIdentityDbContextPath = Path.Combine(dataDirectory, "NewIdentityDbContext.cs");
+        File.WriteAllText(
+            existingIdentityDbContextPath,
+            "using Microsoft.EntityFrameworkCore;\r\n\r\nnamespace TestProject.Data;\r\n\r\npublic class NewIdentityDbContext : DbContext\r\n{\r\n}\r\n");
+
+        var (crudExitCode, crudOutput, crudError) = await ScaffoldCliHelper.RunScaffoldAsync(
+            TargetFramework,
+            "blazor-crud",
+            "--project", _testProjectPath,
+            "--model", "TestModel",
+            "--dataContext", "TestDbContext",
+            "--dbProvider", "sqlite-efcore",
+            "--page", "CRUD");
+        Assert.True(crudExitCode == 0, $"CRUD scaffold should succeed.\nOutput: {crudOutput}\nError: {crudError}");
+
+        var (identityExitCode, identityOutput, identityError) = await ScaffoldCliHelper.RunScaffoldAsync(
+            TargetFramework,
+            "blazor-identity",
+            "--project", _testProjectPath,
+            "--dataContext", "TestDbContext",
+            "--dbProvider", "sqlite-efcore");
+        Assert.True(identityExitCode == 0, $"Blazor Identity scaffold should succeed.\nOutput: {identityOutput}\nError: {identityError}");
+
+        var suffixedIdentityDbContextPath = Path.Combine(dataDirectory, "NewIdentityDbContext1.cs");
+        Assert.True(File.Exists(suffixedIdentityDbContextPath), "Blazor Identity should create NewIdentityDbContext1.cs when NewIdentityDbContext already exists.");
+        Assert.True(File.Exists(existingIdentityDbContextPath), "The pre-existing NewIdentityDbContext.cs should remain in place.");
+
+        var suffixedIdentityDbContextContent = File.ReadAllText(suffixedIdentityDbContextPath);
+        Assert.Contains("public class NewIdentityDbContext1(", suffixedIdentityDbContextContent);
+        Assert.Contains(": IdentityDbContext<TestProject.Data.ApplicationUser>", suffixedIdentityDbContextContent);
+
+        var (buildExitCode, buildOutput, buildError) = await RunBuildAsync(_testProjectDir);
+        Assert.True(buildExitCode == 0,
+            $"Project should build after Identity scaffolding creates a suffixed DbContext.\nOutput: {buildOutput}\nError: {buildError}");
+    }
+
+    [Fact]
     public async Task Scaffold_BlazorIdentity_Net10_CliInvocation()
     {
         // Arrange write project + Program.cs + Blazor project structure

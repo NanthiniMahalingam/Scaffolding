@@ -111,6 +111,37 @@ public class IdentityNet10IntegrationTests : IdentityIntegrationTestsBase
             $"Project should build after scaffolding.\nExit code: {postExitCode}\nOutput: {postOutput}\nError: {postError}");
     }
 
+    [Fact]
+    public async Task Scaffold_Identity_GeneratesUniqueDbContext_WhenCrudDbContextExists()
+    {
+        File.WriteAllText(_testProjectPath, ProjectContent);
+        File.WriteAllText(Path.Combine(_testProjectDir, "Program.cs"), ScaffoldCliHelper.GetMinimalProgramCs());
+
+        var dataDirectory = Path.Combine(_testProjectDir, "Data");
+        Directory.CreateDirectory(dataDirectory);
+        File.WriteAllText(
+            Path.Combine(dataDirectory, "TestDbContext.cs"),
+            "using Microsoft.EntityFrameworkCore;\r\n\r\nnamespace TestProject.Data;\r\n\r\npublic class TestDbContext : DbContext\r\n{\r\n}\r\n");
+
+        var (cliExitCode, cliOutput, cliError) = await ScaffoldCliHelper.RunScaffoldAsync(
+            TargetFramework,
+            "identity",
+            "--project", _testProjectPath,
+            "--dataContext", "TestDbContext",
+            "--dbProvider", "sqlite-efcore");
+        Assert.True(cliExitCode == 0, $"CLI scaffold should succeed.\nOutput: {cliOutput}\nError: {cliError}");
+
+        var identityDbContextPath = Path.Combine(dataDirectory, "NewIdentityDbContext.cs");
+        Assert.True(File.Exists(identityDbContextPath), "Identity scaffolding should create NewIdentityDbContext.cs when TestDbContext already exists.");
+        Assert.Contains("public class NewIdentityDbContext(", File.ReadAllText(identityDbContextPath));
+        Assert.Contains(": IdentityDbContext<TestProject.Data.ApplicationUser>", File.ReadAllText(identityDbContextPath));
+        Assert.True(File.Exists(Path.Combine(dataDirectory, "TestDbContext.cs")), "The existing CRUD DbContext should remain in place.");
+
+        var (postExitCode, postOutput, postError) = await RunBuildAsync(_testProjectDir);
+        Assert.True(postExitCode == 0,
+            $"Project should build after identity scaffolding.\nExit code: {postExitCode}\nOutput: {postOutput}\nError: {postError}");
+    }
+
     // identityMinimalHostingChanges.json does not exist for net10.0+; only net8.0 uses it.
     [Fact]
     public override void IdentityMinimalHostingChangesConfig_ExistsForTargetFramework() { }
