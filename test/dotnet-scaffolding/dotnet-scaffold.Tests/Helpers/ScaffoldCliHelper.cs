@@ -1,6 +1,8 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -39,43 +41,34 @@ internal static class ScaffoldCliHelper
     /// <summary>
     /// Gets the path to the dotnet executable.
     /// On CI, the Arcade build system installs the correct .NET SDK at {repoRoot}/.dotnet/.
-    /// This method checks multiple sources in priority order:
-    /// 1. DOTNET_INSTALL_DIR environment variable (set by Arcade's eng/common/tools.ps1)
-    /// 2. {repoRoot}/.dotnet/ directory (standard Arcade layout)
-    /// 3. The directory of the currently-running dotnet process (the host running the tests)
-    /// 4. Falls back to "dotnet" (resolved via PATH)
+    /// This method checks multiple sources in priority order and prefers a candidate that
+    /// can run the requested target framework when one is provided.
     /// </summary>
-    public static string GetDotNetPath()
+    public static string GetDotNetPath(string? targetFramework = null)
     {
-        // 1. Check DOTNET_INSTALL_DIR — Arcade always sets this
-        var installDir = System.Environment.GetEnvironmentVariable("DOTNET_INSTALL_DIR");
-        if (!string.IsNullOrEmpty(installDir))
+        var candidates = new[]
         {
-            var candidate = FindDotNetInDir(installDir);
-            if (candidate != null) return candidate;
+            FindDotNetInDir(System.Environment.GetEnvironmentVariable("DOTNET_INSTALL_DIR") ?? string.Empty),
+            FindDotNetInDir(Path.Combine(GetRepoRoot(), ".dotnet")),
+            FindDotNetInDir(Path.GetDirectoryName(System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName) ?? string.Empty)
+        }
+        .Where(path => !string.IsNullOrEmpty(path))
+        .Select(path => path!)
+        .Concat(FindDotNetInPath())
+        .ToArray();
+
+        var compatibleCandidate = candidates.FirstOrDefault(candidate => CanRunTargetFramework(candidate, targetFramework));
+        if (!string.IsNullOrEmpty(compatibleCandidate))
+        {
+            return compatibleCandidate;
         }
 
-        // 2. Check {repoRoot}/.dotnet/
-        var repoRoot = GetRepoRoot();
-        var dotnetDir = Path.Combine(repoRoot, ".dotnet");
-        var fromRepo = FindDotNetInDir(dotnetDir);
-        if (fromRepo != null) return fromRepo;
-
-        // 3. Check the running process's directory
-        var currentProcess = System.Diagnostics.Process.GetCurrentProcess();
-        var processDir = Path.GetDirectoryName(currentProcess.MainModule?.FileName);
-        if (!string.IsNullOrEmpty(processDir))
-        {
-            var fromProcess = FindDotNetInDir(processDir);
-            if (fromProcess != null) return fromProcess;
-        }
-
-        return "dotnet";
+        return candidates.FirstOrDefault() ?? "dotnet";
     }
 
-    private static string? FindDotNetInDir(string directory)
+    private static string? FindDotNetInDir(string? directory)
     {
-        if (!Directory.Exists(directory)) return null;
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory)) return null;
 
         var dotnetExe = Path.Combine(directory, "dotnet.exe");
         if (File.Exists(dotnetExe)) return dotnetExe;
@@ -84,6 +77,69 @@ internal static class ScaffoldCliHelper
         if (File.Exists(dotnetBin)) return dotnetBin;
 
         return null;
+    }
+
+    private static IEnumerable<string> FindDotNetInPath()
+    {
+        var path = System.Environment.GetEnvironmentVariable("PATH");
+        if (string.IsNullOrEmpty(path))
+        {
+            return Array.Empty<string>();
+        }
+
+        var dotnetPaths = new List<string>();
+        foreach (var directory in path.Split(Path.PathSeparator))
+        {
+            var dotnetPath = FindDotNetInDir(directory);
+            if (!string.IsNullOrEmpty(dotnetPath))
+            {
+                dotnetPaths.Add(dotnetPath);
+            }
+        }
+
+        return dotnetPaths;
+    }
+
+    private static bool CanRunTargetFramework(string dotnetPath, string? targetFramework)
+    {
+        if (string.IsNullOrEmpty(targetFramework))
+        {
+            return true;
+        }
+
+        if (!TryGetTargetFrameworkMajorVersion(targetFramework, out var targetMajorVersion))
+        {
+            return true;
+        }
+
+        var dotnetRoot = Path.GetDirectoryName(dotnetPath);
+        if (string.IsNullOrEmpty(dotnetRoot))
+        {
+            return true;
+        }
+
+        var runtimeRoot = Path.Combine(dotnetRoot, "shared", "Microsoft.NETCore.App");
+        if (!Directory.Exists(runtimeRoot))
+        {
+            return false;
+        }
+
+        return Directory.EnumerateDirectories(runtimeRoot)
+            .Select(Path.GetFileName)
+            .Any(version => version is not null && version.StartsWith($"{targetMajorVersion}.", System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool TryGetTargetFrameworkMajorVersion(string targetFramework, out int majorVersion)
+    {
+        majorVersion = default;
+
+        if (!targetFramework.StartsWith("net", System.StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var versionText = new string(targetFramework.Skip(3).TakeWhile(char.IsDigit).ToArray());
+        return int.TryParse(versionText, out majorVersion);
     }
 
     /// <summary>
@@ -96,9 +152,9 @@ internal static class ScaffoldCliHelper
     /// MSBUILD_EXE_PATH to prevent the test host's MSBuild context from leaking
     /// into the child build process.
     /// </summary>
-    private static void ConfigureDotNetEnvironment(ProcessStartInfo startInfo)
+    private static void ConfigureDotNetEnvironment(ProcessStartInfo startInfo, string? targetFramework = null)
     {
-        var dotnetPath = GetDotNetPath();
+        var dotnetPath = GetDotNetPath(targetFramework);
         startInfo.FileName = dotnetPath;
 
         if (dotnetPath != "dotnet")
@@ -179,7 +235,7 @@ internal static class ScaffoldCliHelper
                 CreateNoWindow = true
             }
         };
-        ConfigureDotNetEnvironment(process.StartInfo);
+        ConfigureDotNetEnvironment(process.StartInfo, targetFramework);
         process.StartInfo.ArgumentList.Add("run");
         process.StartInfo.ArgumentList.Add("--no-build");
         process.StartInfo.ArgumentList.Add("-c");
@@ -226,7 +282,7 @@ internal static class ScaffoldCliHelper
                 CreateNoWindow = true
             }
         };
-        ConfigureDotNetEnvironment(process.StartInfo);
+        ConfigureDotNetEnvironment(process.StartInfo, targetFramework);
         process.StartInfo.ArgumentList.Add("run");
         process.StartInfo.ArgumentList.Add("--no-build");
         process.StartInfo.ArgumentList.Add("-c");
@@ -362,6 +418,7 @@ public class {modelName}
         @"@using Microsoft.AspNetCore.Components.Forms
 @using Microsoft.AspNetCore.Components.Routing
 @using Microsoft.AspNetCore.Components.Web
+@using TestProject.Components.Layout
 @using static Microsoft.AspNetCore.Components.Web.RenderMode
 ";
 

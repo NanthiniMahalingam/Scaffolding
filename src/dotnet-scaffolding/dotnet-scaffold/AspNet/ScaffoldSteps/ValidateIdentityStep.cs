@@ -1,5 +1,6 @@
 // Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
+using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.DotNet.Scaffolding.Core.Scaffolders;
 using Microsoft.DotNet.Scaffolding.Core.Steps;
@@ -152,19 +153,17 @@ internal class ValidateIdentityStep : ScaffoldStep
             _logger.LogError($"Missing/Invalid {AspNetConstants.CliOptions.DataContextOption} option.");
             return null;
         }
-        else
-        {
-            if (!SyntaxFacts.IsValidIdentifier(DataContext) || DataContext.Equals("DbContext", StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogInformation($"Invalid {AspNetConstants.CliOptions.DataContextOption} option");
-                _logger.LogInformation($"Using default '{AspNetConstants.NewDbContext}'");
-                DataContext = AspNetConstants.NewDbContext;
-            }
 
-            if (string.IsNullOrEmpty(DatabaseProvider) || !PackageConstants.EfConstants.IdentityEfPackagesDict.ContainsKey(DatabaseProvider))
-            {
-                DatabaseProvider = PackageConstants.EfConstants.SqlServer;
-            }
+        if (!SyntaxFacts.IsValidIdentifier(DataContext) || DataContext.Equals("DbContext", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation($"Invalid {AspNetConstants.CliOptions.DataContextOption} option");
+            _logger.LogInformation($"Using default '{AspNetConstants.Identity.DbContextName}'");
+            DataContext = AspNetConstants.Identity.DbContextName;
+        }
+
+        if (string.IsNullOrEmpty(DatabaseProvider) || !PackageConstants.EfConstants.IdentityEfPackagesDict.ContainsKey(DatabaseProvider))
+        {
+            DatabaseProvider = PackageConstants.EfConstants.SqlServer;
         }
 
         return new IdentitySettings
@@ -186,7 +185,7 @@ internal class ValidateIdentityStep : ScaffoldStep
     /// <returns>A task that represents the asynchronous operation, with a result of the IdentityModel.</returns>
     private async Task<IdentityModel?> GetIdentityModelAsync(ScaffolderContext context, IdentitySettings settings)
     {
-        ProjectInfo projectInfo = ClassAnalyzers.GetProjectInfo(settings.Project, _logger);
+        Microsoft.DotNet.Tools.Scaffold.AspNet.Common.ProjectInfo projectInfo = ClassAnalyzers.GetProjectInfo(settings.Project, _logger);
         context.SetSpecifiedTargetFramework(projectInfo.LowestSupportedTargetFramework);
         var projectDirectory = Path.GetDirectoryName(projectInfo.ProjectPath);
         if (projectInfo is null || projectInfo.CodeService is null || string.IsNullOrEmpty(projectDirectory))
@@ -194,14 +193,15 @@ internal class ValidateIdentityStep : ScaffoldStep
             return null;
         }
 
-        var allClasses = await projectInfo.CodeService.GetAllClassSymbolsAsync();
-        //find DbContext info or create properties for a new one.
-        var dbContextClassName = settings.DataContext;
-        DbContextInfo dbContextInfo = new();
+        var allClasses = (await projectInfo.CodeService.GetAllClassSymbolsAsync()).ToList();
+        var dbContextClassSymbol = GetIdentityDbContextSymbol(allClasses, settings.DataContext);
+        var dbContextClassName = string.IsNullOrEmpty(settings.DataContext)
+            ? settings.DataContext
+            : ResolveIdentityDbContextName(settings.DataContext, dbContextClassSymbol, allClasses);
 
+        DbContextInfo dbContextInfo = new();
         if (!string.IsNullOrEmpty(dbContextClassName) && !string.IsNullOrEmpty(settings.DatabaseProvider))
         {
-            var dbContextClassSymbol = allClasses.FirstOrDefault(x => x.Name.Equals(dbContextClassName, StringComparison.OrdinalIgnoreCase));
             dbContextInfo = ClassAnalyzers.GetIdentityDbContextInfo(settings.Project, dbContextClassSymbol, dbContextClassName, settings.DatabaseProvider);
             dbContextInfo.EfScenario = true;
         }
@@ -249,5 +249,43 @@ internal class ValidateIdentityStep : ScaffoldStep
         }
 
         return scaffoldingModel;
+    }
+
+    private static bool IsIdentityDbContextSymbol(ISymbol? symbol)
+        => symbol is INamedTypeSymbol namedTypeSymbol && IsIdentityDbContext(namedTypeSymbol.BaseType);
+
+    private static bool IsIdentityDbContext(INamedTypeSymbol? type)
+        => type is not null && (
+            (type.Name.StartsWith("IdentityDbContext", StringComparison.Ordinal)
+                && type.ContainingNamespace.ToDisplayString() == "Microsoft.AspNetCore.Identity.EntityFrameworkCore")
+            || IsIdentityDbContext(type.BaseType));
+
+    private static ISymbol? GetIdentityDbContextSymbol(IEnumerable<ISymbol> allClasses, string? dbContextClassName)
+        => string.IsNullOrEmpty(dbContextClassName)
+            ? null
+            : allClasses.FirstOrDefault(x => x.Name.Equals(dbContextClassName, StringComparison.OrdinalIgnoreCase) && IsIdentityDbContextSymbol(x));
+
+    private static string ResolveIdentityDbContextName(
+        string requestedName,
+        ISymbol? existingIdentitySymbol,
+        IEnumerable<ISymbol> allClasses)
+    {
+        if (existingIdentitySymbol is not null)
+        {
+            return requestedName;
+        }
+
+        var classNames = allClasses.Select(symbol => symbol.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var baseName = classNames.Contains(requestedName)
+            ? AspNetConstants.Identity.DbContextName
+            : requestedName;
+        for (var suffix = 0; ; suffix++)
+        {
+            var candidateName = suffix == 0 ? baseName : $"{baseName}{suffix}";
+            if (!classNames.Contains(candidateName))
+            {
+                return candidateName;
+            }
+        }
     }
 }
